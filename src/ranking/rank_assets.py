@@ -4,101 +4,99 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-INPUT_FILE = PROJECT_ROOT / "data" / "processed" / "SPY_features.csv"
-OUTPUT_FILE = PROJECT_ROOT / "data" / "processed" / "SPY_ranked.csv"
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
 
 def calculate_score(df):
-    """
-    Calculate a quantitative score using momentum,
-    trend, volatility, and volume.
-    """
+    """Calculate the QuantSignal score for each asset."""
 
-    # Momentum: stronger recent returns are better
-    momentum_score = df["return_5d"].rank(pct=True)
+    df = df.copy()
 
-    # Trend: price above its moving average is positive
-    trend_score = df["trend_signal"]
+    # Remove rows where rolling indicators are not available
+    df = df.dropna(
+        subset=[
+            "return_5d",
+            "volatility_20d",
+            "volume_ratio",
+        ]
+    )
 
-    # Volume: unusually high volume receives a positive score
-    volume_score = df["volume_ratio"].rank(pct=True)
-
-    # Lower volatility is preferred
-    volatility_score = 1 - df["volatility_20d"].rank(pct=True)
-
-    # Combine the signals
+    # QuantSignal score
+    #
+    # Momentum:        30%
+    # Trend:           30%
+    # Volume:          20%
+    # Low volatility: 20%
     df["quant_score"] = (
-        0.35 * momentum_score
-        + 0.30 * trend_score
-        + 0.20 * volume_score
-        + 0.15 * volatility_score
+        0.30 * df["return_5d"]
+        + 0.30 * df["trend_signal"]
+        + 0.20 * df["volume_ratio"]
+        + 0.20 * (1 / (1 + df["volatility_20d"]))
     )
 
     return df
 
 
-def rank_assets():
-    """Generate the QuantSignal score."""
+def main():
+    """Rank all assets on the latest available date."""
 
-    df = pd.read_csv(INPUT_FILE)
+    files = sorted(PROCESSED_DIR.glob("*_features.csv"))
 
-    df["date"] = pd.to_datetime(df["date"])
+    if not files:
+        raise FileNotFoundError(
+            f"No feature files found in {PROCESSED_DIR}"
+        )
 
-    # Remove rows where indicators are not yet available
-    df = df.dropna(
-        subset=[
-            "return_5d",
-            "ma_20",
-            "ma_50",
-            "volatility_20d",
-            "volume_ratio",
-        ]
-    ).copy()
+    all_assets = []
 
-    # Calculate score
-    df = calculate_score(df)
+    for file in files:
+        df = pd.read_csv(file)
 
-    # Rank observations from strongest to weakest
-    df["rank"] = (
-        df.groupby("date")["quant_score"]
-        .rank(ascending=False, method="first")
+        ticker = file.stem.replace("_features", "")
+        df["ticker"] = ticker
+
+        df = calculate_score(df)
+
+        # Keep only the latest observation for cross-asset ranking
+        latest = df.iloc[-1].copy()
+
+        all_assets.append(latest)
+
+    ranking = pd.DataFrame(all_assets)
+
+    # Rank assets from highest score to lowest score
+    ranking["rank"] = (
+        ranking["quant_score"]
+        .rank(ascending=False, method="min")
+        .astype(int)
     )
 
-    # Sort by score
-    df = df.sort_values(
-        ["date", "quant_score"],
-        ascending=[True, False]
+    ranking = ranking.sort_values("rank")
+
+    output_file = PROCESSED_DIR / "asset_ranking.csv"
+    ranking.to_csv(output_file, index=False)
+
+    print(f"Ranked {len(ranking)} assets")
+    print(f"Saved to: {output_file}")
+
+    print("\nLatest QuantSignal ranking:")
+    print(
+        ranking[
+            [
+                "ticker",
+                "date",
+                "close",
+                "return_5d",
+                "volatility_20d",
+                "volume_ratio",
+                "trend_signal",
+                "momentum_signal",
+                "quant_score",
+                "rank",
+            ]
+        ].to_string(index=False)
     )
-
-    # Save
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    df.to_csv(OUTPUT_FILE, index=False)
-
-    print(f"Generated QuantSignal scores for {len(df)} rows")
-    print(f"Saved to: {OUTPUT_FILE}")
-
-    print("\nLatest signals:")
-
-    latest_date = df["date"].max()
-
-    latest = df[df["date"] == latest_date][
-        [
-            "date",
-            "close",
-            "return_5d",
-            "volatility_20d",
-            "volume_ratio",
-            "trend_signal",
-            "momentum_signal",
-            "quant_score",
-            "rank",
-        ]
-    ]
-
-    print(latest.to_string(index=False))
 
 
 if __name__ == "__main__":
-    rank_assets()
+    main()

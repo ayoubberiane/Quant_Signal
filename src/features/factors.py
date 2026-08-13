@@ -1,94 +1,82 @@
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-INPUT_FILE = PROJECT_ROOT / "data" / "processed" / "SPY_clean.csv"
-OUTPUT_FILE = PROJECT_ROOT / "data" / "processed" / "SPY_features.csv"
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
 
-def calculate_features():
-    """Calculate quantitative features from cleaned market data."""
+def generate_features(df):
+    """Generate quantitative features for one asset."""
 
-    # Load cleaned data
-    df = pd.read_csv(INPUT_FILE)
+    df = df.copy()
 
-    # Make sure the data is chronological
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-
-    # --------------------------------------------------
-    # 1. Daily return
-    # --------------------------------------------------
+    # Daily return
     df["daily_return"] = df["close"].pct_change()
 
-    # --------------------------------------------------
-    # 2. 5-day momentum
-    # --------------------------------------------------
-    df["return_5d"] = df["close"].pct_change(periods=5)
+    # 5-day momentum
+    df["return_5d"] = df["close"].pct_change(5)
 
-    # --------------------------------------------------
-    # 3. Moving averages
-    # --------------------------------------------------
-    df["ma_20"] = df["close"].rolling(window=20).mean()
-    df["ma_50"] = df["close"].rolling(window=50).mean()
+    # Moving averages
+    df["ma_20"] = df["close"].rolling(20).mean()
+    df["ma_50"] = df["close"].rolling(50).mean()
 
-    # --------------------------------------------------
-    # 4. 20-day annualized volatility
-    # --------------------------------------------------
+    # 20-day volatility
     df["volatility_20d"] = (
-        df["daily_return"]
-        .rolling(window=20)
-        .std()
-        * np.sqrt(252)
+        df["daily_return"].rolling(20).std() * (252 ** 0.5)
     )
 
-    # --------------------------------------------------
-    # 5. Volume ratio
-    # --------------------------------------------------
-    df["volume_ma_20"] = df["volume"].rolling(window=20).mean()
-
+    # Volume ratio
     df["volume_ratio"] = (
-        df["volume"] / df["volume_ma_20"]
+        df["volume"] / df["volume"].rolling(20).mean()
     )
 
-    # --------------------------------------------------
-    # 6. Trend signal
-    # --------------------------------------------------
+    # Trend signal
     df["trend_signal"] = (
         df["ma_20"] > df["ma_50"]
     ).astype(int)
 
-    # --------------------------------------------------
-    # 7. Momentum signal
-    # --------------------------------------------------
+    # Momentum signal
     df["momentum_signal"] = (
         df["return_5d"] > 0
     ).astype(int)
 
-    # Save features
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    return df
 
-    df.to_csv(OUTPUT_FILE, index=False)
 
-    print(f"Generated features for {len(df)} rows")
-    print(f"Saved to: {OUTPUT_FILE}")
+def process_asset(input_file):
+    """Generate features for one cleaned asset."""
 
-    print("\nFeature columns:")
-    print([
-        "daily_return",
-        "return_5d",
-        "ma_20",
-        "ma_50",
-        "volatility_20d",
-        "volume_ratio",
-        "trend_signal",
-        "momentum_signal",
-    ])
+    ticker = input_file.stem.replace("_clean", "")
+
+    df = pd.read_csv(input_file)
+
+    df = generate_features(df)
+
+    output_file = PROCESSED_DIR / f"{ticker}_features.csv"
+
+    df.to_csv(output_file, index=False)
+
+    print(
+        f"{ticker}: generated features for "
+        f"{len(df)} rows → {output_file.name}"
+    )
+
+
+def main():
+    """Generate features for all cleaned assets."""
+
+    files = sorted(PROCESSED_DIR.glob("*_clean.csv"))
+
+    if not files:
+        raise FileNotFoundError(
+            f"No cleaned datasets found in {PROCESSED_DIR}"
+        )
+
+    for file in files:
+        process_asset(file)
 
 
 if __name__ == "__main__":
-    calculate_features()
+    main()
