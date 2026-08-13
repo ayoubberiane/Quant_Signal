@@ -4,10 +4,14 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # Load the API key from .env
+<<<<<<< HEAD
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
+=======
+load_dotenv()
+>>>>>>> 341fcaf69e1384e44cf60d0987a2358cbe606067
 
 API_KEY = os.getenv("POLYGON_API_KEY")
 
@@ -79,6 +83,12 @@ def download_market_data():
 
     print(f"Downloaded {len(df)} rows for {TICKER}")
     print("Saved to data/raw/SPY.csv")
+<<<<<<< HEAD
    
 if __name__ == "__main__":
     download_market_data()
+=======
+
+if __name__ == "__main__":
+    download_market_data(
+>>>>>>> 341fcaf69e1384e44cf60d0987a2358cbe606067
