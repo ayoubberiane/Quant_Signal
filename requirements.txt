@@ -7,3 +7,5 @@ matplotlib
 seaborn
 jupyter
 plotly
+requests
+python-dotenv
