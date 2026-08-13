@@ -1,31 +1,40 @@
 import os
-import requests
-import pandas as pd
-from dotenv import load_dotenv
-
-# Load the API key from .env
-<<<<<<< HEAD
 from pathlib import Path
 
+import pandas as pd
+import requests
+from dotenv import load_dotenv
+
+
+# Project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load API key from .env
 load_dotenv(PROJECT_ROOT / ".env")
-=======
-load_dotenv()
->>>>>>> 341fcaf69e1384e44cf60d0987a2358cbe606067
 
 API_KEY = os.getenv("POLYGON_API_KEY")
 
-TICKER = "SPY"
 START_DATE = "2025-01-01"
 END_DATE = "2025-12-31"
 
+# Assets to analyze
+TICKERS = [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "EFA",
+    "EEM",
+    "TLT",
+    "GLD",
+]
 
-def download_market_data():
-    """Download daily market data from Polygon."""
+
+def download_market_data(ticker):
+    """Download daily market data for one asset."""
 
     url = (
         f"https://api.polygon.io/v2/aggs/ticker/"
-        f"{TICKER}/range/1/day/{START_DATE}/{END_DATE}"
+        f"{ticker}/range/1/day/{START_DATE}/{END_DATE}"
     )
 
     params = {
@@ -35,25 +44,27 @@ def download_market_data():
         "apiKey": API_KEY,
     }
 
-    response = requests.get(url, params=params)
+    response = requests.get(url, params=params, timeout=30)
 
     if response.status_code != 200:
         raise Exception(
-            f"API request failed: {response.status_code}\n"
-            f"{response.text}"
+            f"API request failed for {ticker}: "
+            f"{response.status_code}\n{response.text}"
         )
 
     data = response.json()
 
     if "results" not in data:
-        raise Exception(f"No results returned: {data}")
+        raise Exception(
+            f"No results returned for {ticker}: {data}"
+        )
 
     df = pd.DataFrame(data["results"])
 
-    # Convert Polygon timestamp into a readable date
+    # Convert Polygon timestamp
     df["date"] = pd.to_datetime(df["t"], unit="ms")
 
-    # Rename Polygon's abbreviated column names
+    # Rename Polygon columns
     df = df.rename(
         columns={
             "o": "open",
@@ -65,7 +76,7 @@ def download_market_data():
         }
     )
 
-    # Keep only the columns we need
+    # Keep required columns
     df = df[
         [
             "date",
@@ -78,17 +89,44 @@ def download_market_data():
         ]
     ]
 
+    # Add ticker
+    df["ticker"] = ticker
+
     # Save the data
-    df.to_csv("data/raw/SPY.csv", index=False)
+    output_file = (
+        PROJECT_ROOT
+        / "data"
+        / "raw"
+        / f"{ticker}.csv"
+    )
 
-    print(f"Downloaded {len(df)} rows for {TICKER}")
-    print("Saved to data/raw/SPY.csv")
-<<<<<<< HEAD
-   
-if __name__ == "__main__":
-    download_market_data()
-=======
+    output_file.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    df.to_csv(output_file, index=False)
+
+    print(
+        f"{ticker}: downloaded {len(df)} rows → "
+        f"{output_file.name}"
+    )
+
+
+def main():
+    """Download data for all assets."""
+
+    if not API_KEY:
+        raise ValueError(
+            "POLYGON_API_KEY was not found in .env"
+        )
+
+    for ticker in TICKERS:
+        try:
+            download_market_data(ticker)
+        except Exception as error:
+            print(f"ERROR for {ticker}: {error}")
+
 
 if __name__ == "__main__":
-    download_market_data(
->>>>>>> 341fcaf69e1384e44cf60d0987a2358cbe606067
+    main()
