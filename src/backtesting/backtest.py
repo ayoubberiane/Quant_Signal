@@ -30,18 +30,60 @@ def load_features():
         df = pd.read_csv(path)
         df["date"] = pd.to_datetime(df["date"])
 
+        ticker = filename.replace("_features.csv", "")
+        df["ticker"] = ticker
+
         frames.append(df)
 
     if not frames:
-        raise FileNotFoundError("No feature files were found.")
+        raise FileNotFoundError(
+            "No feature files were found."
+        )
 
     return pd.concat(frames, ignore_index=True)
+
+
+def calculate_quant_score(df):
+    """Calculate QuantSignal score for every historical observation."""
+
+    df = df.copy()
+
+    required_columns = [
+        "return_5d",
+        "volatility_20d",
+        "volume_ratio",
+        "trend_signal",
+    ]
+
+    missing = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            f"Missing columns required for quant score: {missing}"
+        )
+
+    df["quant_score"] = (
+        0.30 * df["return_5d"]
+        + 0.30 * df["trend_signal"]
+        + 0.20 * df["volume_ratio"]
+        + 0.20 * (
+            1 / (1 + df["volatility_20d"])
+        )
+    )
+
+    return df
 
 
 def calculate_forward_returns(df):
     """Calculate next-day returns for each asset."""
 
-    df = df.sort_values(["ticker", "date"]).copy()
+    df = df.sort_values(
+        ["ticker", "date"]
+    ).copy()
 
     df["next_day_return"] = (
         df.groupby("ticker")["close"].shift(-1)
@@ -54,7 +96,7 @@ def calculate_forward_returns(df):
 
 def calculate_portfolio_returns(df):
     """
-    Simulate a simple strategy:
+    Simulate a simple strategy.
 
     At each date:
     - Rank assets using QuantSignal score.
@@ -62,16 +104,26 @@ def calculate_portfolio_returns(df):
     - Hold it for the next trading day.
     """
 
-    df = df.dropna(subset=["next_day_return", "quant_score"]).copy()
+    df = df.dropna(
+        subset=[
+            "next_day_return",
+            "quant_score",
+        ]
+    ).copy()
 
     rankings = (
-        df.sort_values(["date", "quant_score"], ascending=[True, False])
+        df.sort_values(
+            ["date", "quant_score"],
+            ascending=[True, False],
+        )
         .groupby("date")
         .head(1)
         .copy()
     )
 
-    rankings["strategy_return"] = rankings["next_day_return"]
+    rankings["strategy_return"] = (
+        rankings["next_day_return"]
+    )
 
     return rankings
 
@@ -81,15 +133,21 @@ def calculate_metrics(strategy_returns):
 
     returns = strategy_returns["strategy_return"]
 
-    cumulative_return = (1 + returns).prod() - 1
+    cumulative_return = (
+        (1 + returns).prod() - 1
+    )
 
     annualized_return = (
-        (1 + cumulative_return) ** (252 / len(returns)) - 1
+        (1 + cumulative_return)
+        ** (252 / len(returns))
+        - 1
         if len(returns) > 0
         else 0
     )
 
-    volatility = returns.std() * (252 ** 0.5)
+    volatility = (
+        returns.std() * (252 ** 0.5)
+    )
 
     sharpe_ratio = (
         annualized_return / volatility
@@ -97,15 +155,22 @@ def calculate_metrics(strategy_returns):
         else 0
     )
 
-    cumulative_curve = (1 + returns).cumprod()
+    cumulative_curve = (
+        1 + returns
+    ).cumprod()
 
     running_max = cumulative_curve.cummax()
 
-    drawdown = cumulative_curve / running_max - 1
+    drawdown = (
+        cumulative_curve / running_max
+        - 1
+    )
 
     max_drawdown = drawdown.min()
 
-    win_rate = (returns > 0).mean()
+    win_rate = (
+        returns > 0
+    ).mean()
 
     return {
         "Total Return": cumulative_return,
@@ -123,22 +188,36 @@ def main():
 
     df = load_features()
 
-    print(f"Loaded {len(df)} total observations")
-    print(f"Assets: {sorted(df['ticker'].unique())}")
+    print(
+        f"Loaded {len(df)} total observations"
+    )
+
+    print(
+        f"Assets: {sorted(df['ticker'].unique())}"
+    )
+
+    print("\nCalculating QuantSignal scores...")
+
+    df = calculate_quant_score(df)
 
     print("\nCalculating forward returns...")
 
     df = calculate_forward_returns(df)
 
-    print("Running QuantSignal backtest...")
+    print("\nRunning QuantSignal backtest...")
 
     strategy = calculate_portfolio_returns(df)
 
     metrics = calculate_metrics(strategy)
 
-    output_path = DATA_DIR / "backtest_results.csv"
+    output_path = (
+        DATA_DIR / "backtest_results.csv"
+    )
 
-    strategy.to_csv(output_path, index=False)
+    strategy.to_csv(
+        output_path,
+        index=False
+    )
 
     print("\nBacktest Results")
     print("----------------")
@@ -146,12 +225,18 @@ def main():
     for name, value in metrics.items():
 
         if "Ratio" in name:
-            print(f"{name}: {value:.3f}")
-
+            print(
+                f"{name}: {value:.3f}"
+            )
         else:
-            print(f"{name}: {value:.2%}")
+            print(
+                f"{name}: {value:.2%}"
+            )
 
-    print(f"\nSaved backtest data to: {output_path}")
+    print(
+        f"\nSaved backtest data to: "
+        f"{output_path}"
+    )
 
 
 if __name__ == "__main__":
