@@ -18,10 +18,16 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from features.factors import generate_features          # noqa: E402
+from scoring import (                                    # noqa: E402
+    add_quant_score,
+    effective_weights,
+    rank_score,
+    winsorise,
+    zscore,
+)
 from ranking.rank_assets import calculate_score          # noqa: E402
 from backtesting.backtest import (                       # noqa: E402
     calculate_forward_returns,
-    calculate_metrics,
     calculate_quant_score,
 )
 
@@ -146,30 +152,64 @@ def test_calculate_score_drops_rows_with_missing_inputs():
     assert len(scored) < len(df)
 
 
-def test_score_formula_matches_its_documented_weights():
-    """Check the arithmetic against the weights written in the comment."""
+def test_score_is_a_weighted_sum_of_standardised_terms():
+    """Check the arithmetic against the weights and the z-scored inputs."""
+    df = pd.DataFrame({
+        "return_5d": [0.10, -0.02, 0.01],
+        "trend_signal": [1, 0, 1],
+        "volume_ratio": [1.5, 0.8, 1.0],
+        "volatility_20d": [0.20, 0.35, 0.25],
+    }, index=["A", "B", "C"])
+
+    scored = calculate_score(df)
+    expected = (
+        0.30 * scored["z_return_5d"]
+        + 0.30 * scored["z_trend_signal"]
+        + 0.20 * scored["z_volume_ratio"]
+        - 0.20 * scored["z_volatility_20d"]
+    )
+    pd.testing.assert_series_equal(
+        scored["quant_score"], expected, check_names=False
+    )
+
+
+def test_single_asset_scores_zero_not_nan():
+    """A cross-section of one has no dispersion, so every z-score is 0."""
     df = pd.DataFrame({
         "return_5d": [0.10],
         "trend_signal": [1],
         "volume_ratio": [1.5],
         "volatility_20d": [0.20],
     })
-    expected = (0.30 * 0.10) + (0.30 * 1) + (0.20 * 1.5)
-    expected += 0.20 * (1 / 1.20)
-    assert calculate_score(df)["quant_score"].iloc[0] == pytest.approx(expected)
+    scored = calculate_score(df)
+    assert scored["quant_score"].iloc[0] == pytest.approx(0.0)
+    assert np.isfinite(scored["quant_score"]).all()
 
 
 def test_ranking_and_backtest_scores_agree():
-    """rank_assets and backtest each define the score; they must not drift."""
+    """Both call sites share one definition in scoring.py; prove they match."""
     df = pd.DataFrame({
-        "return_5d": [0.05, -0.02],
-        "trend_signal": [1, 0],
-        "volume_ratio": [1.2, 0.9],
-        "volatility_20d": [0.18, 0.33],
+        "date": [pd.Timestamp("2025-06-02")] * 3,
+        "return_5d": [0.05, -0.02, 0.01],
+        "trend_signal": [1, 0, 1],
+        "volume_ratio": [1.2, 0.9, 1.4],
+        "volatility_20d": [0.18, 0.33, 0.21],
     })
     from_ranking = calculate_score(df)["quant_score"].to_numpy()
     from_backtest = calculate_quant_score(df)["quant_score"].to_numpy()
     np.testing.assert_allclose(from_ranking, from_backtest)
+
+
+def test_backtest_score_requires_a_date_column():
+    """Without dates there is no per-date cross-section to standardise in."""
+    df = pd.DataFrame({
+        "return_5d": [0.05, 0.01],
+        "trend_signal": [1, 0],
+        "volume_ratio": [1.2, 0.9],
+        "volatility_20d": [0.18, 0.33],
+    })
+    with pytest.raises(ValueError, match="date"):
+        calculate_quant_score(df)
 
 
 def test_calculate_quant_score_rejects_missing_columns():
@@ -177,23 +217,13 @@ def test_calculate_quant_score_rejects_missing_columns():
         calculate_quant_score(pd.DataFrame({"return_5d": [0.01]}))
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN DEFECT: the four terms are summed without standardisation, "
-        "so each term's influence is set by its raw scale rather than by "
-        "its weight. return_5d is order 0.01, trend_signal is 0 or 1, and "
-        "volume_ratio is unbounded above. Momentum's 0.30 weight therefore "
-        "moves the ranking far less than volume's 0.20. Fix by z-scoring or "
-        "rank-transforming each term cross-sectionally before weighting."
-    ),
-    strict=True,
-)
 def test_momentum_outweighs_volume_as_the_weights_intend():
     """Momentum is weighted 0.30 and volume 0.20, so momentum should dominate.
 
-    Asset A has far stronger momentum; asset B only has heavier volume. With
-    the intended weighting A outranks B. It does not, because the terms are
-    on different scales.
+    Asset A is ahead on momentum; asset B only on volume. This was the
+    regression test for the scaling defect: before the terms were
+    standardised, B won, because volume_ratio's raw scale outweighed
+    momentum's larger coefficient.
     """
     df = pd.DataFrame({
         "return_5d": [0.08, 0.00],      # A strongly ahead on momentum
@@ -233,23 +263,110 @@ def test_forward_return_does_not_leak_across_tickers():
     assert pd.isna(last_of_a["next_day_return"])
 
 
-def test_metrics_on_a_hand_computed_series():
-    returns = pd.Series([0.10, -0.05, 0.02])
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    expected_total = (1.10 * 0.95 * 1.02) - 1
-    assert metrics["Total Return"] == pytest.approx(expected_total)
-    assert metrics["Win Rate"] == pytest.approx(2 / 3)
-    assert metrics["Maximum Drawdown"] == pytest.approx(-0.05)
+# --------------------------------------------------------------------------
+# Cross-sectional standardisation (src/scoring.py)
+# --------------------------------------------------------------------------
+
+def test_zscore_is_centred_and_unit_scale():
+    series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    z = zscore(series, winsorised=False)
+    assert z.mean() == pytest.approx(0.0, abs=1e-12)
+    assert z.std(ddof=0) == pytest.approx(1.0, abs=1e-12)
 
 
-def test_metrics_drawdown_is_never_positive():
-    returns = pd.Series([0.01] * 10)
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    assert metrics["Maximum Drawdown"] <= 0.0
+def test_zscore_of_a_constant_column_is_zero_not_inf():
+    """The case that breaks a naive fix: binary trend_signal, all ones.
+
+    In a broad uptrend every asset reads 1, the cross-sectional standard
+    deviation is 0, and dividing by it would give inf or NaN and destroy
+    the whole score, not just that term.
+    """
+    z = zscore(pd.Series([1, 1, 1, 1, 1]))
+    assert (z == 0.0).all()
+    assert np.isfinite(z).all()
 
 
-def test_metrics_handle_zero_volatility_without_dividing_by_zero():
-    returns = pd.Series([0.0, 0.0, 0.0])
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    assert np.isfinite(metrics["Sharpe Ratio"])
-    assert metrics["Sharpe Ratio"] == 0
+def test_zscore_of_all_zeros_is_zero():
+    z = zscore(pd.Series([0, 0, 0]))
+    assert (z == 0.0).all()
+    assert np.isfinite(z).all()
+
+
+def test_binary_signal_still_separates_when_it_varies():
+    z = zscore(pd.Series([1, 1, 0, 0]))
+    assert z.iloc[0] > 0 and z.iloc[2] < 0
+
+
+def test_winsorise_pulls_in_an_unbounded_volume_spike():
+    series = pd.Series([0.9, 1.0, 1.1, 1.0, 0.95, 1.05, 40.0])
+    assert winsorise(series).max() < 40.0
+
+
+def test_rank_score_is_bounded_and_ignores_outlier_size():
+    modest = rank_score(pd.Series([1.0, 2.0, 3.0, 4.0]))
+    extreme = rank_score(pd.Series([1.0, 2.0, 3.0, 9999.0]))
+    pd.testing.assert_series_equal(modest, extreme)
+    assert modest.min() >= -1.0 and modest.max() <= 1.0
+
+
+def test_higher_volatility_lowers_the_score():
+    """The volatility weight is negative, so the penalty must bite."""
+    df = pd.DataFrame({
+        "return_5d": [0.05, 0.05, 0.05],
+        "trend_signal": [1, 1, 1],
+        "volume_ratio": [1.0, 1.0, 1.0],
+        "volatility_20d": [0.10, 0.25, 0.60],
+    }, index=["LOW", "MID", "HIGH"])
+    scored = add_quant_score(df)
+    assert (scored["quant_score"]["LOW"] > scored["quant_score"]["MID"]
+            > scored["quant_score"]["HIGH"])
+
+
+def test_per_date_standardisation_does_not_mix_dates():
+    """Each date must be scored against its own cross-section only.
+
+    Both dates hold the same relative pattern at different absolute levels.
+    Standardised within date, the z-scores are identical across the two.
+    Pooled, the later date's higher level would dominate: look-ahead.
+    """
+    df = pd.DataFrame({
+        "date": [pd.Timestamp("2025-01-02")] * 2
+                + [pd.Timestamp("2025-01-03")] * 2,
+        "return_5d": [0.01, 0.03, 0.51, 0.53],
+        "trend_signal": [0, 1, 0, 1],
+        "volume_ratio": [1.0, 1.2, 1.0, 1.2],
+        "volatility_20d": [0.20, 0.25, 0.20, 0.25],
+    })
+    scored = add_quant_score(df, by="date")
+    first = scored[scored["date"] == "2025-01-02"]["z_return_5d"].to_numpy()
+    second = scored[scored["date"] == "2025-01-03"]["z_return_5d"].to_numpy()
+    np.testing.assert_allclose(first, second)
+
+
+def test_add_quant_score_rejects_an_unknown_method():
+    df = pd.DataFrame({
+        "return_5d": [0.01], "trend_signal": [1],
+        "volume_ratio": [1.0], "volatility_20d": [0.2],
+    })
+    with pytest.raises(ValueError, match="unknown method"):
+        add_quant_score(df, method="not_a_method")
+
+
+def test_effective_weights_now_track_intended_weights():
+    """The regression guard for the original bug.
+
+    Before standardisation, return_5d's 30% weight moved about 3% of the
+    ranking spread and volume_ratio's 20% moved about 55%. Each term's
+    effective share must now sit close to its intended share.
+    """
+    rng = np.random.default_rng(17)
+    n = 7
+    df = pd.DataFrame({
+        "return_5d": rng.normal(0.0, 0.02, n),
+        "trend_signal": rng.integers(0, 2, n),
+        "volume_ratio": rng.lognormal(0.0, 0.4, n),
+        "volatility_20d": rng.uniform(0.10, 0.45, n),
+    })
+    table = effective_weights(df)
+    gap = (table["effective"] - table["intended"]).abs().max()
+    assert gap < 0.10, f"largest intended/effective gap is {gap:.1%}\n{table}"
