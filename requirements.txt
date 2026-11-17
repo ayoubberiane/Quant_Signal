@@ -1,3 +1,4 @@
+# Runtime dependencies (loose). Exact, tested versions live in requirements.lock.txt.
 pandas
 numpy
 yfinance
@@ -5,8 +6,6 @@ scipy
 scikit-learn
 matplotlib
 seaborn
-jupyter
 plotly
 requests
 python-dotenv
-pytest
