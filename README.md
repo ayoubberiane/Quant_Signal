@@ -237,11 +237,32 @@ data/
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock.txt
 
 cp .env.example .env     # then add your Polygon key
 python -m pytest tests/ -v
 ```
+
+### Dependencies
+
+| File | What it holds |
+|---|---|
+| `requirements.txt` | runtime packages, unpinned |
+| `requirements-dev.txt` | runtime + `pytest`, `jupyter`, `pip-tools` |
+| `requirements.lock.txt` | every package pinned to an exact, tested version with hashes (generated) |
+
+Install from the lock file so everyone, and CI, runs the same versions. To add
+or upgrade a package, edit `requirements.txt` or `requirements-dev.txt`, then
+regenerate the lock with Python 3.13 and commit both files:
+
+```bash
+pip-compile --generate-hashes --allow-unsafe --strip-extras --no-emit-index-url \
+    --output-file requirements.lock.txt requirements-dev.txt
+```
+
+Add `--upgrade` to move every pin to the latest release. The lock is resolved
+on Linux; if `pip install` fails on macOS or Windows, fall back to
+`pip install -r requirements-dev.txt`.
 
 `.env` is gitignored and must stay that way. Editor swap files (`*.swp`)
 are ignored too: a nano swap file of `.env` once leaked a live API key into

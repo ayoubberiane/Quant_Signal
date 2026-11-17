@@ -1,0 +1,5 @@
+# Development tools, on top of the runtime dependencies.
+-r requirements.txt
+pytest
+jupyter
+pip-tools
