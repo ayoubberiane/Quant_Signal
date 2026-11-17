@@ -288,9 +288,15 @@ data/
 
 ## Setup
 
+Runtime dependencies are in `requirements.txt`; tests and notebook
+dependencies in `requirements-dev.txt`. Both use version ranges rather than
+exact pins. For reproducibility, generate a lock file from a working
+install with `pip freeze > requirements.lock.txt` and commit it.
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt                  # runtime
+pip install -r requirements-dev.txt              # tests and notebooks
 
 cp .env.example .env     # then add your Polygon key
 python -m pytest -q                  # 82 tests

@@ -1,0 +1,13 @@
+# Development and research dependencies.
+#
+#     pip install -r requirements.txt -r requirements-dev.txt
+
+# Tests
+pytest>=8.0,<10
+
+# Exploratory data analysis — the remaining Phase 1 roadmap item.
+# Imported by notebooks, not by src/.
+matplotlib>=3.8,<4
+seaborn>=0.13,<1
+plotly>=5.20,<7
+jupyterlab>=4.0,<5
