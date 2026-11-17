@@ -1,0 +1,6 @@
+# Dashboard (app.py), on top of the runtime dependencies.
+# Not in the lock file: torch is large and the tests do not need it.
+-r requirements.txt
+gradio>=6,<7
+chronos-forecasting>=2,<3
+torch

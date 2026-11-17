@@ -1,0 +1,51 @@
+name: deploy-space
+
+# Publishes the dashboard to a Hugging Face Space on every push to main.
+# One-time setup, in GitHub: Settings > Secrets and variables > Actions
+#   secret   HF_TOKEN  a Hugging Face access token with write permission
+#   variable HF_SPACE  the Space id, e.g. your-hf-username/QuantSignal
+# Until HF_SPACE is set, this workflow skips.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-space
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: ${{ vars.HF_SPACE != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the Space bundle
+        run: ./scripts/build_space.sh
+      - name: Upload to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          pip install "huggingface_hub>=1"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          space = os.environ["HF_SPACE"]
+          api.create_repo(space, repo_type="space", space_sdk="gradio",
+                          exist_ok=True)
+          api.upload_folder(
+              folder_path="build/space",
+              repo_id=space,
+              repo_type="space",
+              commit_message=f"Deploy {os.environ['GITHUB_SHA'][:7]}",
+              delete_patterns=["src/**"],  # drop files removed from src/
+          )
+          print(f"Deployed: https://huggingface.co/spaces/{space}")
+          PY

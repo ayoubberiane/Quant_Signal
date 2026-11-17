@@ -8,6 +8,30 @@ The project aims to transform raw financial-market data into systematic investme
 
 > **Note:** QuantSignal is an educational and research project. It does not provide financial advice or recommendations to buy or sell securities.
 
+## 🖥️ Live dashboard
+
+A Gradio app (`app.py`) puts the research in a browser, with no install:
+
+- **Today's ranking** of the seven ETFs, with every input to the score.
+- **Backtest lab:** choose how many assets to hold, how often to
+  rebalance and what trading costs, and see the strategy against equal
+  weight and SPY, with drawdown and risk metrics.
+- **AI forecast:** [Chronos-Bolt](https://huggingface.co/amazon/chronos-bolt-small),
+  Amazon's pretrained time-series model from Hugging Face, forecasts any
+  asset with an uncertainty band, then is tested walk-forward as a factor
+  against the hand-built score.
+
+It is published as a Hugging Face Space by `.github/workflows/deploy-space.yml`
+(setup below). Run it locally with:
+
+```bash
+pip install -r requirements-app.txt
+python app.py            # then open http://127.0.0.1:7860
+```
+
+The dashboard downloads prices from Yahoo Finance, so it needs no API key.
+The research pipeline below still uses Polygon.
+
 ---
 
 ## 🎯 Project Objective
@@ -43,10 +67,10 @@ The platform will progressively develop from a financial data pipeline into a co
 - [x] Risk analytics (vol, drawdown, Sharpe, Sortino, Calmar)
 - [x] Backtesting engine (costs, benchmarks, cost sweep)
 - [ ] Market-regime detection
-- [ ] Machine-learning research
-- [ ] Interactive dashboard
+- [x] Machine-learning research: Chronos-Bolt forecast as a walk-forward factor
+- [x] Interactive dashboard (Gradio, `app.py`)
 - [ ] Automated data updates
-- [ ] Cloud deployment
+- [x] Cloud deployment (Hugging Face Spaces)
 
 ---
 
@@ -214,6 +238,21 @@ Polygon.io daily aggregates (adjusted)
 
 Both consumers import the score from `src/scoring.py`.
 
+The dashboard (`app.py`) runs the same features, score and backtest engine on
+Yahoo Finance prices (`src/ingestion/yahoo.py`), and adds the Chronos factor
+from `src/forecasting/chronos_signal.py`.
+
+### The Chronos factor
+
+Each month-end, Chronos-Bolt forecasts every asset's next 20 trading days
+from prices up to that day only. The forecast return,
+log(median forecast / last close), replaces the composite score, and the
+backtest engine then holds the top N for the month at the chosen cost, with
+no other change. The dashboard reports each signal's information coefficient
+(rank correlation with the next 20 days' return) and its t-statistic. With
+seven assets and about 30 months neither signal is statistically
+distinguishable from zero, and the page says so rather than hiding it.
+
 ## Repository layout
 
 ```
@@ -225,9 +264,15 @@ src/
   ranking/rank_assets.py   cross-sectional ranking
   backtesting/engine.py    portfolio simulation, costs, metrics
   backtesting/backtest.py  backtest entry point
+  ingestion/yahoo.py       Yahoo Finance adapter for the dashboard
+  forecasting/chronos_signal.py  Chronos-Bolt forecasts and factor
+app.py                     Gradio dashboard
+space/README.md            Hugging Face Space card
+scripts/build_space.sh     assembles the Space bundle in build/space
 tests/
-  test_factors.py          33 tests: features, scoring, ranking
+  test_factors.py          30 tests: features, scoring, ranking
   test_engine.py           32 tests: simulation, costs, benchmarks
+  test_forecasting.py      11 tests: no look-ahead, Chronos factor, Yahoo
 data/
   raw/                     downloaded prices (gitignored)
   processed/               cleaned data and results (gitignored)
@@ -267,6 +312,21 @@ on Linux; if `pip install` fails on macOS or Windows, fall back to
 `.env` is gitignored and must stay that way. Editor swap files (`*.swp`)
 are ignored too: a nano swap file of `.env` once leaked a live API key into
 this repository's history.
+
+## Deploying the dashboard to Hugging Face
+
+1. Create a Hugging Face account, then an access token with **write**
+   permission (Settings, Access Tokens).
+2. In this GitHub repository, open Settings, Secrets and variables, Actions:
+   - add a **secret** `HF_TOKEN` holding the token;
+   - add a **variable** `HF_SPACE`, e.g. `your-hf-username/QuantSignal`.
+3. Run the `deploy-space` workflow from the Actions tab, or push to `main`.
+   It creates the Space if needed and uploads the app; every later push to
+   `main` redeploys it.
+
+The Space card (title, emoji, Python and Gradio versions) lives in
+`space/README.md`. Edit the code here, not in the Space: each deploy
+overwrites it.
 
 ## Licence
 
