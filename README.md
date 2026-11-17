@@ -183,6 +183,56 @@ Recorded rather than hidden:
 
 ---
 
+## 🔬 Walk-forward validation
+
+The weights were chosen by hand and never tested out of sample.
+`src/validation/walkforward.py` tests them, and keeps two questions apart:
+
+1. Do the fixed weights work out of sample?
+2. Does **fitting** the weights to history beat leaving them fixed?
+
+```bash
+python src/validation/validate.py
+python src/validation/validate.py --train-days 378 --test-days 63
+```
+
+The sample is cut into consecutive windows. Weights are fitted on each
+training segment only, then applied unchanged to the test segment that
+follows. Test segments never overlap, so the concatenated out-of-sample
+returns form one series no fitted parameter ever saw. Three series come out
+over identical dates: **fitted**, **fixed**, and **equal weight** (no signal
+at all).
+
+**Why question 2 matters.** Fitting four weights on seven assets can
+reproduce almost any past, so a strong in-sample result is close to
+guaranteed and means nothing on its own. The in-sample minus out-of-sample
+gap is the measurement; a large gap is the finding, not a failure.
+
+On random synthetic data the validator behaves as it should:
+
+| | Ann. Return | Sharpe | Max DD |
+|---|---|---|---|
+| Fitted weights (OOS) | 3.99% | 0.413 | -12.9% |
+| Fixed weights (OOS) | 8.20% | 0.841 | -15.9% |
+| Equal weight (no signal) | 9.79% | **1.374** | -7.7% |
+
+Mean in-sample Sharpe was 1.9 against 0.4 out of sample: a gap of **+1.42**,
+which is selection luck being measured rather than skill. Fitting lost to
+the fixed weights by 0.455, and both lost to equal weight. Those are the
+right answers on noise, and they are what the tool exists to surface.
+
+The weight grid is deliberately coarse, and factor signs are constrained
+rather than searched (momentum, trend and volume positive, volatility
+negative). A finer grid would fit training data more closely without
+improving out-of-sample results, and letting the optimiser flip a sign would
+fit noise instead of testing the strategy's own claims.
+
+Walk-forward reduces overfitting; it does not eliminate it. The universe is
+still fixed and currently-listed, and the factor set itself was chosen with
+hindsight.
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -225,9 +275,12 @@ src/
   ranking/rank_assets.py   cross-sectional ranking
   backtesting/engine.py    portfolio simulation, costs, metrics
   backtesting/backtest.py  backtest entry point
+  validation/walkforward.py walk-forward out-of-sample validation
+  validation/validate.py   validation entry point
 tests/
   test_factors.py          33 tests: features, scoring, ranking
   test_engine.py           32 tests: simulation, costs, benchmarks
+  test_walkforward.py      20 tests: windows, no-leak, overfitting gap
 data/
   raw/                     downloaded prices (gitignored)
   processed/               cleaned data and results (gitignored)
@@ -240,7 +293,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env     # then add your Polygon key
-python -m pytest tests/ -v
+python -m pytest -q                  # 82 tests
+python -m pytest -q -m "not slow"    # 75 tests, skips the weight fits
 ```
 
 `.env` is gitignored and must stay that way. Editor swap files (`*.swp`)

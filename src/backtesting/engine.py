@@ -74,11 +74,116 @@ def target_weights(scores: pd.Series, top_n: int) -> pd.Series:
     return pd.Series(1.0 / len(chosen), index=chosen.index)
 
 
+def simulate(
+    score_values: np.ndarray,
+    return_values: np.ndarray,
+    dates: pd.DatetimeIndex,
+    tickers: np.ndarray,
+    is_rebalance: np.ndarray,
+    top_n: int = 3,
+    cost_bps: float = DEFAULT_COST_BPS,
+    with_holdings: bool = True,
+) -> pd.DataFrame:
+    """The simulation core, on prepared matrices.
+
+    Separated from `run_backtest` so that a parameter search can pivot the
+    panel once and call this directly for each candidate. Reshaping the
+    panel per candidate dominated the runtime of a weight search.
+
+    score_values and return_values are both dates x tickers. NaN scores mean
+    "not scoreable today"; NaN returns must already be zero-filled.
+    """
+    n_dates, n_assets = score_values.shape
+    held = min(top_n, n_assets)
+
+    weights = np.zeros(n_assets, dtype=float)
+    gross = np.zeros(n_dates)
+    turnover = np.zeros(n_dates)
+    holdings_count = np.zeros(n_dates, dtype=int)
+    holdings_text: list[str] = []
+
+    for row in range(n_dates):
+        if is_rebalance[row]:
+            day_scores = score_values[row]
+            valid = np.flatnonzero(~np.isnan(day_scores))
+            target = np.zeros(n_assets, dtype=float)
+            if valid.size:
+                # argsort on negated scores gives highest-first, matching
+                # target_weights(); ties resolve by column order either way.
+                order = valid[np.argsort(-day_scores[valid], kind="stable")]
+                chosen = order[:min(held, valid.size)]
+                target[chosen] = 1.0 / chosen.size
+            turnover[row] = np.abs(target - weights).sum()
+            weights = target
+
+        day_returns = return_values[row]
+        gross[row] = float(weights @ day_returns)
+
+        active = np.abs(weights) > 1e-12
+        holdings_count[row] = int(active.sum())
+        if with_holdings:
+            holdings_text.append(", ".join(sorted(tickers[active])))
+
+        # Hold to the next date: weights drift with realised returns.
+        grown = weights * (1.0 + day_returns)
+        total = grown.sum()
+        weights = grown / total if total > 0 else grown
+
+    cost = turnover * cost_bps / 10_000.0
+
+    result = pd.DataFrame({
+        "gross_return": gross,
+        "turnover": turnover,
+        "cost": cost,
+        "net_return": gross - cost,
+        "n_holdings": holdings_count,
+        "rebalanced": is_rebalance,
+    }, index=dates)
+    if with_holdings:
+        result["holdings"] = holdings_text
+    result.index.name = "date"
+    return result
+
+
+def prepare_matrices(
+    panel: pd.DataFrame, frequency: str = "monthly", value: str = "quant_score"
+):
+    """Pivot a long panel into the matrices `simulate` expects.
+
+    Returns (score_values, return_values, dates, tickers, is_rebalance).
+    """
+    frame = panel.dropna(subset=[value, "next_day_return"]).copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    if frame.empty:
+        return None
+
+    scores = frame.pivot_table(index="date", columns="ticker",
+                               values=value).sort_index()
+    returns = (frame.pivot_table(index="date", columns="ticker",
+                                 values="next_day_return")
+               .sort_index()
+               .reindex(columns=scores.columns))
+
+    dates = scores.index
+    rebalance_on = _rebalance_dates(dates, frequency)
+    is_rebalance = np.fromiter((d in rebalance_on for d in dates),
+                               dtype=bool, count=len(dates))
+
+    return (
+        scores.to_numpy(dtype=float),
+        np.nan_to_num(returns.to_numpy(dtype=float), nan=0.0),
+        dates,
+        np.asarray(scores.columns),
+        is_rebalance,
+    )
+
+
 def run_backtest(
     panel: pd.DataFrame,
     top_n: int = 3,
     frequency: str = "monthly",
     cost_bps: float = DEFAULT_COST_BPS,
+    with_holdings: bool = True,
 ) -> pd.DataFrame:
     """Simulate the strategy. Returns one row per date.
 
@@ -91,55 +196,14 @@ def run_backtest(
     if missing:
         raise ValueError(f"panel is missing columns: {sorted(missing)}")
 
-    frame = panel.dropna(subset=["quant_score", "next_day_return"]).copy()
-    frame["date"] = pd.to_datetime(frame["date"])
-    if frame.empty:
+    prepared = prepare_matrices(panel, frequency=frequency)
+    if prepared is None:
         return pd.DataFrame()
 
-    dates = pd.DatetimeIndex(sorted(frame["date"].unique()))
-    rebalance_on = _rebalance_dates(dates, frequency)
-
-    scores = frame.pivot_table(index="date", columns="ticker",
-                               values="quant_score")
-    returns = frame.pivot_table(index="date", columns="ticker",
-                                values="next_day_return")
-
-    weights = pd.Series(0.0, index=scores.columns)
-    rows = []
-
-    for date in dates:
-        turnover = 0.0
-        rebalanced = date in rebalance_on
-
-        if rebalanced:
-            target = target_weights(scores.loc[date], top_n)
-            target = target.reindex(scores.columns).fillna(0.0)
-            turnover = float((target - weights).abs().sum())
-            weights = target
-
-        period_returns = returns.loc[date].fillna(0.0)
-        gross = float((weights * period_returns).sum())
-        cost = turnover * cost_bps / 10_000.0
-
-        rows.append({
-            "date": date,
-            "gross_return": gross,
-            "turnover": turnover,
-            "cost": cost,
-            "net_return": gross - cost,
-            "n_holdings": int((weights.abs() > 1e-12).sum()),
-            "rebalanced": rebalanced,
-            "holdings": ", ".join(
-                sorted(weights[weights.abs() > 1e-12].index)
-            ),
-        })
-
-        # Hold to the next date: weights drift with realised returns.
-        grown = weights * (1.0 + period_returns)
-        total = grown.sum()
-        weights = grown / total if total > 0 else grown
-
-    return pd.DataFrame(rows).set_index("date")
+    score_values, return_values, dates, tickers, is_rebalance = prepared
+    return simulate(score_values, return_values, dates, tickers,
+                    is_rebalance, top_n=top_n, cost_bps=cost_bps,
+                    with_holdings=with_holdings)
 
 
 def buy_and_hold(panel: pd.DataFrame, ticker: str) -> pd.Series:
