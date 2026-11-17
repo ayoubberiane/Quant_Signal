@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.pytest_cache/
 
 # Virtual environment
 .venv/
@@ -13,9 +15,21 @@ env/
 # Downloaded financial data
 data/raw/*
 data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
 
 # Environment variables and API keys
 .env
+.env.*
+!.env.example
+
+# Editor swap and backup files
+# A nano/vim swap file of .env leaked a live API key once; keep these out.
+*.swp
+*.swo
+*.swn
+*~
+.*.sw?
 
 # IDE settings
 .vscode/
@@ -24,4 +38,3 @@ data/processed/*
 # Operating system files
 .DS_Store
 Thumbs.db
-.env
