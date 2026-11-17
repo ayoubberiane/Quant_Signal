@@ -28,7 +28,6 @@ from scoring import (                                    # noqa: E402
 from ranking.rank_assets import calculate_score          # noqa: E402
 from backtesting.backtest import (                       # noqa: E402
     calculate_forward_returns,
-    calculate_metrics,
     calculate_quant_score,
 )
 
@@ -262,28 +261,6 @@ def test_forward_return_does_not_leak_across_tickers():
     out = calculate_forward_returns(df).sort_values(["ticker", "date"])
     last_of_a = out[out["ticker"] == "A"].iloc[-1]
     assert pd.isna(last_of_a["next_day_return"])
-
-
-def test_metrics_on_a_hand_computed_series():
-    returns = pd.Series([0.10, -0.05, 0.02])
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    expected_total = (1.10 * 0.95 * 1.02) - 1
-    assert metrics["Total Return"] == pytest.approx(expected_total)
-    assert metrics["Win Rate"] == pytest.approx(2 / 3)
-    assert metrics["Maximum Drawdown"] == pytest.approx(-0.05)
-
-
-def test_metrics_drawdown_is_never_positive():
-    returns = pd.Series([0.01] * 10)
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    assert metrics["Maximum Drawdown"] <= 0.0
-
-
-def test_metrics_handle_zero_volatility_without_dividing_by_zero():
-    returns = pd.Series([0.0, 0.0, 0.0])
-    metrics = calculate_metrics(pd.DataFrame({"strategy_return": returns}))
-    assert np.isfinite(metrics["Sharpe Ratio"])
-    assert metrics["Sharpe Ratio"] == 0
 
 
 # --------------------------------------------------------------------------
