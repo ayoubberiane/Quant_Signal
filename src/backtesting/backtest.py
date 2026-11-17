@@ -1,10 +1,15 @@
 from pathlib import Path
+import sys
 
 import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed"
+
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from scoring import WEIGHTS, add_quant_score  # noqa: E402
 
 FEATURE_FILES = [
     "EEM_features.csv",
@@ -44,16 +49,20 @@ def load_features():
 
 
 def calculate_quant_score(df):
-    """Calculate QuantSignal score for every historical observation."""
+    """Calculate QuantSignal score for every historical observation.
+
+    Standardisation runs within each date (`by="date"`), so each day's
+    cross-section is scored against itself. Standardising over the whole
+    panel at once would mix dates together and let a later date's
+    distribution inform an earlier date's score, which is look-ahead.
+
+    The score definition lives in src/scoring.py and is shared with
+    ranking/rank_assets.py, so the two cannot drift apart.
+    """
 
     df = df.copy()
 
-    required_columns = [
-        "return_5d",
-        "volatility_20d",
-        "volume_ratio",
-        "trend_signal",
-    ]
+    required_columns = list(WEIGHTS.keys())
 
     missing = [
         column
@@ -66,16 +75,17 @@ def calculate_quant_score(df):
             f"Missing columns required for quant score: {missing}"
         )
 
-    df["quant_score"] = (
-        0.30 * df["return_5d"]
-        + 0.30 * df["trend_signal"]
-        + 0.20 * df["volume_ratio"]
-        + 0.20 * (
-            1 / (1 + df["volatility_20d"])
+    if "date" not in df.columns:
+        raise ValueError(
+            "calculate_quant_score needs a 'date' column: the score is "
+            "standardised within each date's cross-section."
         )
-    )
 
-    return df
+    # Rows still in their indicator warm-up would otherwise enter the
+    # cross-section and shift every other asset's z-score that day.
+    df = df.dropna(subset=["return_5d", "volatility_20d", "volume_ratio"])
+
+    return add_quant_score(df, weights=WEIGHTS, by="date")
 
 
 def calculate_forward_returns(df):
